@@ -23,11 +23,8 @@ ld -nostdlib -znocombreloc -T "$GNUEFI_DIR/elf_x86_64_efi.lds" -shared -Bsymboli
    "$CRT0" "$BUILD/main.o" -o "$BUILD/main.so" \
    -L"$GNUEFI_DIR" -lefi -lgnuefi
 
-file "$BUILD/main.so" || true; ls -l "$BUILD/main.so" || true; readelf -h "$BUILD/main.so" | head -5 || true
-objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela \
-        -j .rel.* -j .rela.* -j .reloc --target efi-app-x86_64 --subsystem=10 \
-        "$BUILD/main.so" "$BUILD/iso/EFI/BOOT/BOOTX64.EFI" \
-  || { echo "objcopy efi target unsupported"; exit 1; }
+ls -l "$BUILD/main.so"
+python3 tools/mkpe.py "$BUILD/main.so" "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"
 
 ls -l "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"
 

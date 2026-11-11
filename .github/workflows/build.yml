@@ -1,0 +1,45 @@
+name: Build XP Wizard EFI
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            gnu-efi xorriso mtools dosfstools ovmf qemu-system-x86 python3-pil
+          dpkg -L gnu-efi | grep -E 'elf_x86_64|crt0|libefi|libgnuefi' | head
+
+      - name: 编译 + 打包
+        run: |
+          chmod +x tools/build.sh
+          bash tools/build.sh
+
+      - name: QEMU 引导自测
+        run: |
+          python3 tools/qtest.py || true
+          python3 - <<'PY'
+          import glob, os
+          from PIL import Image
+          for p in sorted(glob.glob("build/shots/*.ppm")):
+              Image.open(p).save(p.replace(".ppm", ".png"))
+          print("png:", len(glob.glob("build/shots/*.png")))
+          PY
+          cat build/qmon.log | head -40 || true
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xp-wizard
+          path: |
+            build/XP-Wizard.iso
+            build/shots/*.png
+            build/qmon.log
+          if-no-files-found: warn

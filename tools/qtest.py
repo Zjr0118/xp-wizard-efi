@@ -26,8 +26,10 @@ open(vars_copy, "wb").write(open(VARS, "rb").read())
 cmd = ["qemu-system-x86_64", "-machine", "q35", "-m", "1024", "-smp", "2",
        "-drive", f"if=pflash,format=raw,readonly=on,file={CODE}",
        "-drive", f"if=pflash,format=raw,file={vars_copy}",
-       "-cdrom", ISO, "-boot", "d", "-vga", "std", "-display", "none",
-       "-monitor", "stdio", "-no-reboot"]
+       "-drive", f"file={os.path.join(ROOT,'build','efiboot.img')},format=raw,if=ide",
+       "-vga", "std", "-display", "none", "-monitor", "stdio", "-no-reboot",
+       "-serial", f"file:{os.path.join(ROOT,'build','serial.log')}",
+       "-d", "guest_errors,int", "-D", os.path.join(ROOT, "build", "qemu-debug.log")]
 
 log = open(os.path.join(ROOT, "build", "qmon.log"), "w")
 q = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=log, stderr=log, text=True)
@@ -38,8 +40,8 @@ def cmdline(c):
     except Exception as e:
         print("monitor write failed", e)
 
-time.sleep(3.0)
-for i in range(26):
+time.sleep(5.0)
+for i in range(12):
     cmdline("sendkey ret")
     time.sleep(1.1)
     cmdline(f"screendump {OUT}/shot_{i:02d}.ppm")

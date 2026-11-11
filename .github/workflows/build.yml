@@ -44,4 +44,6 @@ jobs:
             build/iso/EFI/BOOT/BOOTX64.EFI
             build/main.so
             build/qmon.log
+            build/serial.log
+            build/qemu-debug.log
           if-no-files-found: warn

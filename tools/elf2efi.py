@@ -133,7 +133,7 @@ def main():
     out[0:2] = b"MZ"
     struct.pack_into("<I", out, 0x3C, 0x40)
     out[0x40:0x44] = b"PE\0\0"
-    struct.pack_into("<HHIIIHH", out, 0x44, 0x8664, len(keep), 0, 0, 0, 0xF0, 0x2022)
+    struct.pack_into("<HHIIIHH", out, 0x44, 0x8664, len(keep), 0, 0, 0, 0xF0, 0x0022)
 
     opt = 0x58
     text = [s for s in keep if s["name"] in (".text", ".sdata") or s["name"].startswith(".text")]

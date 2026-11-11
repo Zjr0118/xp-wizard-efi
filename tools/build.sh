@@ -23,10 +23,11 @@ ld -nostdlib -znocombreloc -T "$GNUEFI_DIR/elf_x86_64_efi.lds" -shared -Bsymboli
    "$CRT0" "$BUILD/main.o" -o "$BUILD/main.so" \
    -L"$GNUEFI_DIR" -lefi -lgnuefi
 
-head -4 "$GNUEFI_DIR/elf_x86_64_efi.lds"
-ls -l "$BUILD/main.so"; file "$BUILD/main.so" || true
-objcopy --info 2>&1 | grep -iE "pei|efi|pe-" | head
-python3 tools/mkpe.py "$BUILD/main.so" "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"
+ls -l "$BUILD/main.so"
+objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela \
+        -j .rel.* -j .rela.* -j .reloc --target pei-x86-64 --subsystem=10 \
+        "$BUILD/main.so" "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"
+python3 tools/mkpe.py "$BUILD/iso/EFI/BOOT/BOOTX64.EFI" "$BUILD/iso/EFI/BOOT/BOOTX64.EFI".fixed && mv "$BUILD/iso/EFI/BOOT/BOOTX64.EFI".fixed "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"
 
 ls -l "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"
 

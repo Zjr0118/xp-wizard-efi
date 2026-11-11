@@ -24,8 +24,9 @@ ld -nostdlib -znocombreloc -T "$GNUEFI_DIR/elf_x86_64_efi.lds" -shared -Bsymboli
    -L"$GNUEFI_DIR" -lefi -lgnuefi
 
 ls -l "$BUILD/main.so"
-objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela \
-        -j .rel.* -j .rela.* -j .reloc --target pei-x86-64 --subsystem=10 \
+which -a objcopy; /usr/bin/objcopy --version | head -1
+/usr/bin/objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela \
+        -j .rel.* -j .rela.* -j .reloc -I elf64-x86-64 -O pei-x86-64 --subsystem=10 \
         "$BUILD/main.so" "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"
 python3 tools/mkpe.py "$BUILD/iso/EFI/BOOT/BOOTX64.EFI" "$BUILD/iso/EFI/BOOT/BOOTX64.EFI".fixed && mv "$BUILD/iso/EFI/BOOT/BOOTX64.EFI".fixed "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"
 

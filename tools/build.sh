@@ -11,9 +11,10 @@ python3 tools/frames2raw.py
 
 echo "== 2. 编译 BOOTX64.EFI =="
 SRC=/tmp/gnu-efi
-CRT0="$SRC/x86_64/crt0-efi-x86_64.o"
-[ -f "$CRT0" ] || { echo "gnu-efi build missing"; ls -R "$SRC" | head -30; exit 1; }
-GNUEFI_DIR="$SRC/x86_64"
+CRT0=$(find "$SRC" -name crt0-efi-x86_64.o | head -1)
+[ -f "$CRT0" ] || { echo "gnu-efi build missing"; ls -R "$SRC/x86_64" | head -40; exit 1; }
+GNUEFI_DIR=$(dirname "$CRT0")
+LIBDIR=$(dirname "$(find "$SRC" -name libefi.a | head -1)")
 echo "gnu-efi dir: $GNUEFI_DIR"
 INCS="-I$SRC/inc -I$SRC/inc/x86_64 -I$SRC/inc/protocol"
 
@@ -21,9 +22,9 @@ gcc $INCS -DGNU_EFI_USE_MS_ABI -fPIC -ffreestanding -fno-stack-protector \
     -mno-red-zone -maccumulate-outgoing-args -Wall -O2 \
     -march=x86-64 -mtune=generic -mno-sse3 -mno-sse4.1 -mno-sse4.2 -mno-avx -c src/main.c -o "$BUILD/main.o"
 
-ld -nostdlib -znocombreloc -T "$GNUEFI_DIR/elf_x86_64_efi.lds" -shared -Bsymbolic \
+ld -nostdlib -znocombreloc -T "$(find "$SRC" -name elf_x86_64_efi.lds | head -1)" -shared -Bsymbolic \
    "$CRT0" "$BUILD/main.o" -o "$BUILD/main.so" \
-   -L"$GNUEFI_DIR" -lefi -lgnuefi
+   -L"$GNUEFI_DIR" -L"$LIBDIR" -lefi -lgnuefi
 
 ls -l "$BUILD/main.so"
 python3 tools/elf2efi.py "$BUILD/main.so" "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"

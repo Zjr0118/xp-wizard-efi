@@ -46,7 +46,7 @@ echo "== 4. 打包 ISO =="
 ISO="$BUILD/XP-Wizard.iso"
 rm -f "$ISO"
 xorriso -as mkisofs -o "$ISO" -V XPWIZARD \
-  -eltorito-alt-boot -e efiboot.img -no-emulation -isohybrid-gpt-basdat \
+  -eltorito-alt-boot -e efiboot.img -no-emul-boot -isohybrid-gpt-basdat \
   -graft-points "efiboot.img=$IMG" 2>&1 | tail -5
 ls -lh "$ISO"
 file "$ISO" || true

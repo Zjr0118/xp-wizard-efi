@@ -17,7 +17,8 @@ echo "gnu-efi dir: $GNUEFI_DIR"
 INCS="-I/usr/include/efi -I/usr/include/efi/x86_64 -I/usr/include/efi/protocol"
 
 gcc $INCS -DGNU_EFI_USE_MS_ABI -fPIC -ffreestanding -fno-stack-protector \
-    -mno-red-zone -maccumulate-outgoing-args -Wall -O2 -c src/main.c -o "$BUILD/main.o"
+    -mno-red-zone -maccumulate-outgoing-args -Wall -O2 \
+    -march=x86-64 -mtune=generic -mno-sse3 -mno-sse4.1 -mno-sse4.2 -mno-avx -c src/main.c -o "$BUILD/main.o"
 
 ld -nostdlib -znocombreloc -T "$GNUEFI_DIR/elf_x86_64_efi.lds" -shared -Bsymbolic \
    "$CRT0" "$BUILD/main.o" -o "$BUILD/main.so" \

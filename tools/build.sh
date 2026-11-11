@@ -10,18 +10,17 @@ echo "== 1. 帧转裸位图 =="
 python3 tools/frames2raw.py
 
 echo "== 2. 编译 BOOTX64.EFI =="
-GNUEFI_DIR=""
-for d in /usr/lib/gnu-efi /usr/lib64/gnu-efi /usr/local/lib/gnu-efi; do
-  [ -d "$d" ] && GNUEFI_DIR="$d" && break
-done
-[ -n "$GNUEFI_DIR" ] || { echo "gnu-efi not found"; exit 1; }
+CRT0=$(find /usr -name crt0-efi-x86_64.o 2>/dev/null | head -1)
+[ -n "$CRT0" ] || { echo "gnu-efi not found"; exit 1; }
+GNUEFI_DIR=$(dirname "$CRT0")
+echo "gnu-efi dir: $GNUEFI_DIR"
 INCS="-I/usr/include/efi -I/usr/include/efi/x86_64 -I/usr/include/efi/protocol"
 
 gcc $INCS -DGNU_EFI_USE_MS_ABI -fPIC -ffreestanding -fno-stack-protector \
     -mno-red-zone -maccumulate-outgoing-args -Wall -O2 -c src/main.c -o "$BUILD/main.o"
 
 ld -nostdlib -znocombreloc -T "$GNUEFI_DIR/elf_x86_64_efi.lds" -shared -Bsymbolic \
-   "$GNUEFI_DIR/crt0-efi-x86_64.o" "$BUILD/main.o" -o "$BUILD/main.so" \
+   "$CRT0" "$BUILD/main.o" -o "$BUILD/main.so" \
    -L"$GNUEFI_DIR" -lefi -lgnuefi
 
 objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel -j .rela \

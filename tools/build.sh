@@ -23,7 +23,9 @@ ld -nostdlib -znocombreloc -T "$GNUEFI_DIR/elf_x86_64_efi.lds" -shared -Bsymboli
    "$CRT0" "$BUILD/main.o" -o "$BUILD/main.so" \
    -L"$GNUEFI_DIR" -lefi -lgnuefi
 
-ls -l "$BUILD/main.so"
+head -4 "$GNUEFI_DIR/elf_x86_64_efi.lds"
+ls -l "$BUILD/main.so"; file "$BUILD/main.so" || true
+objcopy --info 2>&1 | grep -iE "pei|efi|pe-" | head
 python3 tools/mkpe.py "$BUILD/main.so" "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"
 
 ls -l "$BUILD/iso/EFI/BOOT/BOOTX64.EFI"

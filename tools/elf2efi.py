@@ -87,7 +87,8 @@ def main():
             if target is None:
                 continue
             if rtype == 8:                  # R_X86_64_RELATIVE
-                val = r_add
+                m = elf2rva(r_add)
+                val = m if m is not None else r_add
             elif rtype in (1, 6, 7):        # 64 / GLOB_DAT / JUMP_SLOT
                 sv = elf2rva(sym_value(rsym)) or 0
                 val = sv + r_add

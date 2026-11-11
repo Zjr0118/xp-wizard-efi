@@ -10,11 +10,12 @@ echo "== 1. 帧转裸位图 =="
 python3 tools/frames2raw.py
 
 echo "== 2. 编译 BOOTX64.EFI =="
-CRT0=$(find /usr -name crt0-efi-x86_64.o 2>/dev/null | head -1)
-[ -n "$CRT0" ] || { echo "gnu-efi not found"; exit 1; }
-GNUEFI_DIR=$(dirname "$CRT0")
+SRC=/tmp/gnu-efi
+CRT0="$SRC/x86_64/crt0-efi-x86_64.o"
+[ -f "$CRT0" ] || { echo "gnu-efi build missing"; ls -R "$SRC" | head -30; exit 1; }
+GNUEFI_DIR="$SRC/x86_64"
 echo "gnu-efi dir: $GNUEFI_DIR"
-INCS="-I/usr/include/efi -I/usr/include/efi/x86_64 -I/usr/include/efi/protocol"
+INCS="-I$SRC/inc -I$SRC/inc/x86_64 -I$SRC/inc/protocol"
 
 gcc $INCS -DGNU_EFI_USE_MS_ABI -fPIC -ffreestanding -fno-stack-protector \
     -mno-red-zone -maccumulate-outgoing-args -Wall -O2 \

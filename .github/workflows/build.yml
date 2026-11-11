@@ -13,8 +13,14 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            gnu-efi xorriso mtools dosfstools ovmf qemu-system-x86 python3-pil
-          dpkg -L gnu-efi | grep -E 'elf_x86_64|crt0|libefi|libgnuefi' | head
+            xorriso mtools dosfstools ovmf qemu-system-x86 python3-pil
+      - name: Build gnu-efi from source (baseline x86-64)
+        run: |
+          git clone --depth 1 --branch 3.0.18 https://github.com/vathpela/gnu-efi.git /tmp/gnu-efi || \
+          git clone --depth 1 https://github.com/vathpela/gnu-efi.git /tmp/gnu-efi
+          cd /tmp/gnu-efi
+          make -j4 ARCH=x86_64 CFLAGS="-march=x86-64 -mtune=generic -mno-sse3 -mno-sse4.1 -mno-sse4.2 -mno-avx -O2 -fno-stack-protector" 2>&1 | tail -5
+          ls /tmp/gnu-efi/inc /tmp/gnu-efi/x86_64" 
 
       - name: 编译 + 打包
         run: |

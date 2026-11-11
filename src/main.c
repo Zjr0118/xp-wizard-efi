@@ -33,12 +33,12 @@ static BOOLEAN load_frame(EFI_HANDLE img, CONST CHAR16 *path)
     s = uefi_call_wrapper(fs->OpenVolume, 2, fs, &root);
     if (EFI_ERROR(s)) return FALSE;
     s = uefi_call_wrapper(root->Open, 5, root, &f, (CHAR16 *)path, EFI_FILE_MODE_READ, 0);
-    if (EFI_ERROR(s)) { uefi_call_wrapper(root->Close, 2, root, NULL); return FALSE; }
+    if (EFI_ERROR(s)) { root->Close(root); return FALSE; }
 
     sz = FRAME_BYTES;
     s = uefi_call_wrapper(f->Read, 3, f, &sz, frame_buf);
-    uefi_call_wrapper(f->Close, 2, f, NULL);
-    uefi_call_wrapper(root->Close, 2, root, NULL);
+    f->Close(f);
+    root->Close(root);
     return (!EFI_ERROR(s) && sz == FRAME_BYTES) ? TRUE : FALSE;
 }
 
@@ -87,7 +87,7 @@ static void pump(UINTN ms, BOOLEAN *key)
     UINTN waited = 0;
     while (waited < ms) {
         if (ST->ConIn && uefi_call_wrapper(gBS->CheckEvent, 1, ST->ConIn->WaitForKey) == EFI_SUCCESS) {
-            uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &k);
+            ST->ConIn->ReadKeyStroke(ST->ConIn, &k);
             *key = TRUE;
             return;
         }
@@ -98,21 +98,21 @@ static void pump(UINTN ms, BOOLEAN *key)
 typedef struct { CHAR16 path[32]; UINTN hint_ms; BOOLEAN anyKey; } STEP;
 
 static const STEP steps[] = {
-    { L"\\frames\\000.bin", 3500, FALSE },   /* 开机 */
-    { L"\\frames\\001.bin", 0,    TRUE  },   /* 选择操作系统 */
-    { L"\\frames\\002.bin", 1200, FALSE },   /* 安装 1/5 */
-    { L"\\frames\\003.bin", 1200, FALSE },
-    { L"\\frames\\004.bin", 1200, FALSE },
-    { L"\\frames\\005.bin", 1200, FALSE },
-    { L"\\frames\\006.bin", 1500, FALSE },   /* 安装 5/5 */
-    { L"\\frames\\007.bin", 0,    TRUE  },   /* 输入法 */
-    { L"\\frames\\008.bin", 0,    TRUE  },   /* 连接 */
-    { L"\\frames\\009.bin", 0,    TRUE  },   /* 名字 */
-    { L"\\frames\\010.bin", 0,    TRUE  },   /* 密码 */
-    { L"\\frames\\011.bin", 1200, FALSE },   /* 空白 */
-    { L"\\frames\\012.bin", 3500, FALSE },   /* 请保持接通电源 */
-    { L"\\frames\\013.bin", 2500, FALSE },   /* 好戏来了 */
-    { L"\\frames\\014.bin", 15000, TRUE },   /* 桌面 */
+    { u"\\frames\\000.bin", 3500, FALSE },   /* 开机 */
+    { u"\\frames\\001.bin", 0,    TRUE  },   /* 选择操作系统 */
+    { u"\\frames\\002.bin", 1200, FALSE },   /* 安装 1/5 */
+    { u"\\frames\\003.bin", 1200, FALSE },
+    { u"\\frames\\004.bin", 1200, FALSE },
+    { u"\\frames\\005.bin", 1200, FALSE },
+    { u"\\frames\\006.bin", 1500, FALSE },   /* 安装 5/5 */
+    { u"\\frames\\007.bin", 0,    TRUE  },   /* 输入法 */
+    { u"\\frames\\008.bin", 0,    TRUE  },   /* 连接 */
+    { u"\\frames\\009.bin", 0,    TRUE  },   /* 名字 */
+    { u"\\frames\\010.bin", 0,    TRUE  },   /* 密码 */
+    { u"\\frames\\011.bin", 1200, FALSE },   /* 空白 */
+    { u"\\frames\\012.bin", 3500, FALSE },   /* 请保持接通电源 */
+    { u"\\frames\\013.bin", 2500, FALSE },   /* 好戏来了 */
+    { u"\\frames\\014.bin", 15000, TRUE },   /* 桌面 */
 };
 
 EFI_STATUS efi_main(EFI_HANDLE img, EFI_SYSTEM_TABLE *st)

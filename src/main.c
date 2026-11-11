@@ -121,10 +121,10 @@ EFI_STATUS efi_main(EFI_HANDLE img, EFI_SYSTEM_TABLE *st)
     UINTN n = sizeof(steps) / sizeof(steps[0]);
 
     InitializeLib(img, st);
-    Print(L"XPWIZARD: start\n");
+    Print(u"XPWIZARD: start\n");
 
     s = uefi_call_wrapper(gBS->LocateProtocol, 3, &GraphicsOutputProtocol, NULL, (void **)&gop);
-    Print(L"XPWIZARD: gop=%d err=%d %dx%d\n", gop ? 1 : 0, (int)s,
+    Print(u"XPWIZARD: gop=%d err=%d %dx%d\n", gop ? 1 : 0, (int)s,
           gop ? gop->Mode->Info->HorizontalResolution : 0,
           gop ? gop->Mode->Info->VerticalResolution : 0);
     if (EFI_ERROR(s)) { gop = NULL; }
@@ -132,7 +132,7 @@ EFI_STATUS efi_main(EFI_HANDLE img, EFI_SYSTEM_TABLE *st)
     for (UINTN i = 0; i < n; i++) {
         BOOLEAN key = FALSE;
         BOOLEAN ok = load_frame(img, steps[i].path);
-        Print(L"XPWIZARD: frame %d load=%d\n", (int)i, ok ? 1 : 0);
+        Print(u"XPWIZARD: frame %d load=%d\n", (int)i, ok ? 1 : 0);
         if (ok) present();
         if (steps[i].anyKey) {
             pump(steps[i].hint_ms ? steps[i].hint_ms : 100000, &key);

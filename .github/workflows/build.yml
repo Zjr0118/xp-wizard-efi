@@ -41,5 +41,7 @@ jobs:
           path: |
             build/XP-Wizard.iso
             build/shots/*.png
+            build/iso/EFI/BOOT/BOOTX64.EFI
+            build/main.so
             build/qmon.log
           if-no-files-found: warn

@@ -3,62 +3,103 @@
 
 #define IMG_W 1024
 #define IMG_H 576
-#define FRAME_BYTES (IMG_W * IMG_H * 2)   /* RGB565 */
+#define FRAME_BYTES (IMG_W * IMG_H * 2)   /* RGB565 little-endian */
 
 static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
+static EFI_SERIAL_IO_PROTOCOL *g_ser = NULL;
 static void *frame_buf = NULL;
-static UINTN frame_cap = 0;
+
+/* ---------------- 调试输出：直接写 COM1 ---------------- */
+static void slog(const char *s)
+{
+    if (g_ser == NULL) return;
+    UINTN n = 0;
+    while (s[n] != 0) n++;
+    UINTN sz = n;
+    if (n == 0) return;
+    uefi_call_wrapper(g_ser->Write, 3, g_ser, &sz, (void *)s);
+}
+
+static void slog_num(const char *tag, UINT64 v)
+{
+    char buf[64];
+    int i = 0, j;
+    for (j = 0; tag[j] != 0 && i < 40; j++) buf[i++] = tag[j];
+    if (v == 0) { buf[i++] = '0'; }
+    else {
+        char tmp[24]; int t = 0;
+        while (v > 0 && t < 24) { tmp[t++] = (char)('0' + (v % 10)); v /= 10; }
+        while (t > 0) buf[i++] = tmp[--t];
+    }
+    buf[i++] = '\r'; buf[i++] = '\n'; buf[i] = 0;
+    slog(buf);
+}
+
+static void slog_hex(const char *tag, UINT64 v)
+{
+    char buf[64];
+    int i = 0, j;
+    static const char *hx = "0123456789ABCDEF";
+    for (j = 0; tag[j] != 0 && i < 40; j++) buf[i++] = tag[j];
+    char tmp[16]; int t = 0;
+    if (v == 0) tmp[t++] = '0';
+    while (v > 0 && t < 16) { tmp[t++] = hx[v & 0xF]; v >>= 4; }
+    while (t > 0) buf[i++] = tmp[--t];
+    buf[i++] = '\r'; buf[i++] = '\n'; buf[i] = 0;
+    slog(buf);
+}
 
 static void wait_ms(UINTN ms) { uefi_call_wrapper(gBS->Stall, 1, ms * 1000); }
 
-/* ---------------- 读文件（从本 EFI 所在的 FAT 卷） ---------------- */
-static BOOLEAN load_frame(EFI_HANDLE img, CONST CHAR16 *path)
+/* ---------------- 屏幕 ---------------- */
+static void clear_fb(UINT32 rgb)
 {
-    EFI_STATUS s;
-    EFI_LOADED_IMAGE_PROTOCOL *li = NULL;
-    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
-    EFI_FILE_PROTOCOL *root = NULL, *f = NULL;
-    UINTN sz;
-
-    if (frame_buf == NULL) {
-        s = uefi_call_wrapper(gBS->AllocatePool, 3, EfiLoaderData,
-                              (frame_cap = FRAME_BYTES + 4096), &frame_buf);
-        if (EFI_ERROR(s)) return FALSE;
+    if (!gop || !gop->Mode || !gop->Mode->Info) return;
+    UINT32 W = gop->Mode->Info->HorizontalResolution;
+    UINT32 H = gop->Mode->Info->VerticalResolution;
+    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
+    UINT8 *fb = (UINT8 *)(UINTN)gop->Mode->FrameBufferBase;
+    for (UINT32 y = 0; y < H; y++) {
+        UINT32 *row = (UINT32 *)(fb + (UINTN)y * stride * 4);
+        for (UINT32 x = 0; x < W; x++) row[x] = rgb;
     }
-
-    s = uefi_call_wrapper(gBS->HandleProtocol, 3, img, &LoadedImageProtocol, (void **)&li);
-    if (EFI_ERROR(s)) return FALSE;
-    s = uefi_call_wrapper(gBS->HandleProtocol, 3, li->DeviceHandle, &FileSystemProtocol, (void **)&fs);
-    if (EFI_ERROR(s)) return FALSE;
-    s = uefi_call_wrapper(fs->OpenVolume, 2, fs, &root);
-    if (EFI_ERROR(s)) return FALSE;
-    s = uefi_call_wrapper(root->Open, 5, root, &f, (CHAR16 *)path, EFI_FILE_MODE_READ, 0);
-    if (EFI_ERROR(s)) { root->Close(root); return FALSE; }
-
-    sz = FRAME_BYTES;
-    s = uefi_call_wrapper(f->Read, 3, f, &sz, frame_buf);
-    f->Close(f);
-    root->Close(root);
-    return (!EFI_ERROR(s) && sz == FRAME_BYTES) ? TRUE : FALSE;
 }
 
-/* ---------------- 贴图（等比缩放 + 居中，四周补黑） ---------------- */
+/* 8 条彩条：只要能看见，就证明 GOP / 帧缓冲写入通路是好的 */
+static void test_pattern(void)
+{
+    if (!gop || !gop->Mode || !gop->Mode->Info) return;
+    UINT32 W = gop->Mode->Info->HorizontalResolution;
+    UINT32 H = gop->Mode->Info->VerticalResolution;
+    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
+    UINT8 *fb = (UINT8 *)(UINTN)gop->Mode->FrameBufferBase;
+    static const UINT32 cols[8] = {
+        0x00FF0000, 0x0000FF00, 0x000000FF, 0x00FFFFFF,
+        0x00FFFF00, 0x0000FFFF, 0x00FF00FF, 0x00666666
+    };
+    for (UINT32 y = 0; y < H; y++) {
+        UINT32 *row = (UINT32 *)(fb + (UINTN)y * stride * 4);
+        for (UINT32 x = 0; x < W; x++) {
+            UINT32 band = (W > 0) ? ((UINT64)x * 8 / W) : 0;
+            if (band > 7) band = 7;
+            row[x] = cols[band];
+        }
+    }
+}
+
+/* 等比缩放居中贴图，四周补黑 */
 static void present(void)
 {
     if (!gop || !gop->Mode || !gop->Mode->Info || !frame_buf) return;
 
     UINT32 W = gop->Mode->Info->HorizontalResolution;
     UINT32 H = gop->Mode->Info->VerticalResolution;
-    UINT32 stride = gop->Mode->Info->PixelsPerScanLine; /* 单位：像素 */
+    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
     UINT8 *fb = (UINT8 *)(UINTN)gop->Mode->FrameBufferBase;
-    UINT32 fmt = (UINT32)gop->Mode->Info->PixelFormat;  /* 0=RGBX 1=BGRX */
+    UINT32 fmt = (UINT32)gop->Mode->Info->PixelFormat;
     const UINT16 *src = (const UINT16 *)frame_buf;
 
-    /* 整屏刷黑 */
-    for (UINT32 y = 0; y < H; y++) {
-        UINT32 *row = (UINT32 *)(fb + (UINTN)y * stride * 4);
-        for (UINT32 x = 0; x < W; x++) row[x] = 0;
-    }
+    clear_fb(0);
 
     UINT32 dw, dh;
     if ((UINT64)W * IMG_H >= (UINT64)H * IMG_W) { dw = (H * IMG_W) / IMG_H; dh = H; }
@@ -80,14 +121,115 @@ static void present(void)
     }
 }
 
+/* ---------------- 读帧：枚举所有 SimpleFileSystem，逐个试路径 ---------------- */
+static EFI_FILE_PROTOCOL *g_root_cache[8];
+static UINTN g_root_n = 0;
+
+static void collect_roots(EFI_HANDLE img)
+{
+    EFI_STATUS s;
+    EFI_HANDLE *hs = NULL;
+    UINTN cnt = 0;
+
+    if (g_root_n > 0) return;
+
+    /* 先放自身所在卷 */
+    EFI_LOADED_IMAGE_PROTOCOL *li = NULL;
+    s = uefi_call_wrapper(gBS->HandleProtocol, 3, img, &LoadedImageProtocol, (void **)&li);
+    if (!EFI_ERROR(s) && li && li->DeviceHandle) {
+        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+        s = uefi_call_wrapper(gBS->HandleProtocol, 3, li->DeviceHandle, &FileSystemProtocol, (void **)&fs);
+        if (!EFI_ERROR(s)) {
+            EFI_FILE_PROTOCOL *r = NULL;
+            s = uefi_call_wrapper(fs->OpenVolume, 2, fs, &r);
+            if (!EFI_ERROR(s)) { g_root_cache[g_root_n++] = r; slog("own volume OK\r\n"); }
+            else slog_hex("own volume OpenVolume err=", s);
+        } else slog_hex("own volume no FS err=", s);
+    } else slog_hex("own volume no LoadedImage err=", s);
+
+    s = uefi_call_wrapper(gBS->LocateHandleBuffer, 5, ByProtocol, &FileSystemProtocol,
+                          NULL, &cnt, &hs);
+    if (EFI_ERROR(s)) { slog_hex("LocateHandleBuffer err=", s); return; }
+    slog_num("fs handles=", cnt);
+    for (UINTN i = 0; i < cnt && g_root_n < 8; i++) {
+        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+        EFI_FILE_PROTOCOL *r = NULL;
+        s = uefi_call_wrapper(gBS->HandleProtocol, 3, hs[i], &FileSystemProtocol, (void **)&fs);
+        if (EFI_ERROR(s)) continue;
+        s = uefi_call_wrapper(fs->OpenVolume, 2, fs, &r);
+        if (EFI_ERROR(s)) continue;
+        g_root_cache[g_root_n++] = r;
+    }
+    slog_num("roots ready=", g_root_n);
+}
+
+static void make_path(CHAR16 *out, UINTN idx, UINTN variant)
+{
+    UINTN i = 0;
+    char num[4];
+    const CHAR16 *dir;
+    if (variant == 0)      dir = u"\\frames\\";
+    else if (variant == 1) dir = u"\\FRAMES\\";
+    else if (variant == 2) dir = u"frames\\";
+    else                   dir = u"\\EFI\\BOOT\\frames\\";
+    while (dir[i] != 0) { out[i] = dir[i]; i++; }
+    num[0] = (char)('0' + (idx / 100) % 10);
+    num[1] = (char)('0' + (idx / 10) % 10);
+    num[2] = (char)('0' + idx % 10);
+    out[i++] = (CHAR16)num[0];
+    out[i++] = (CHAR16)num[1];
+    out[i++] = (CHAR16)num[2];
+    out[i++] = u'.'; out[i++] = u'b'; out[i++] = u'i'; out[i++] = u'n';
+    out[i] = 0;
+}
+
+static UINTN try_read(EFI_FILE_PROTOCOL *root, CHAR16 *path, UINTN *got)
+{
+    EFI_STATUS s;
+    EFI_FILE_PROTOCOL *f = NULL;
+    UINTN sz = FRAME_BYTES + 4096;
+    *got = 0;
+    s = uefi_call_wrapper(root->Open, 5, root, &f, path, EFI_FILE_MODE_READ, 0);
+    if (EFI_ERROR(s)) return 0;
+    s = uefi_call_wrapper(f->Read, 3, f, &sz, frame_buf);
+    uefi_call_wrapper(f->Close, 1, f);
+    if (EFI_ERROR(s)) return 0;
+    *got = sz;
+    return (sz == FRAME_BYTES) ? 1 : 2;
+}
+
+static BOOLEAN load_frame(EFI_HANDLE img, UINTN idx)
+{
+    EFI_STATUS s;
+    CHAR16 path[64];
+
+    if (frame_buf == NULL) {
+        s = uefi_call_wrapper(gBS->AllocatePool, 3, EfiLoaderData, (UINTN)(FRAME_BYTES + 4096), &frame_buf);
+        if (EFI_ERROR(s) || frame_buf == NULL) { slog_hex("AllocatePool err=", s); return FALSE; }
+    }
+    collect_roots(img);
+
+    for (UINTN v = 0; v < 4; v++) {
+        make_path(path, idx, v);
+        for (UINTN r = 0; r < g_root_n; r++) {
+            UINTN got = 0;
+            UINTN rc = try_read(g_root_cache[r], path, &got);
+            if (rc == 1) return TRUE;
+            if (rc == 2) { slog_num("short read got=", got); }
+        }
+    }
+    return FALSE;
+}
+
 /* ---------------- 键盘 ---------------- */
 static void pump(UINTN ms, BOOLEAN *key)
 {
     EFI_INPUT_KEY k;
     UINTN waited = 0;
+    if (ms == 0) ms = 1;
     while (waited < ms) {
         if (ST->ConIn && uefi_call_wrapper(gBS->CheckEvent, 1, ST->ConIn->WaitForKey) == EFI_SUCCESS) {
-            ST->ConIn->ReadKeyStroke(ST->ConIn, &k);
+            uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &k);
             *key = TRUE;
             return;
         }
@@ -95,24 +237,24 @@ static void pump(UINTN ms, BOOLEAN *key)
     }
 }
 
-typedef struct { CHAR16 path[32]; UINTN hint_ms; BOOLEAN anyKey; } STEP;
+typedef struct { UINTN idx; UINTN hint_ms; BOOLEAN anyKey; } STEP;
 
 static const STEP steps[] = {
-    { u"\\frames\\000.bin", 3500, FALSE },   /* 开机 */
-    { u"\\frames\\001.bin", 0,    TRUE  },   /* 选择操作系统 */
-    { u"\\frames\\002.bin", 1200, FALSE },   /* 安装 1/5 */
-    { u"\\frames\\003.bin", 1200, FALSE },
-    { u"\\frames\\004.bin", 1200, FALSE },
-    { u"\\frames\\005.bin", 1200, FALSE },
-    { u"\\frames\\006.bin", 1500, FALSE },   /* 安装 5/5 */
-    { u"\\frames\\007.bin", 0,    TRUE  },   /* 输入法 */
-    { u"\\frames\\008.bin", 0,    TRUE  },   /* 连接 */
-    { u"\\frames\\009.bin", 0,    TRUE  },   /* 名字 */
-    { u"\\frames\\010.bin", 0,    TRUE  },   /* 密码 */
-    { u"\\frames\\011.bin", 1200, FALSE },   /* 空白 */
-    { u"\\frames\\012.bin", 3500, FALSE },   /* 请保持接通电源 */
-    { u"\\frames\\013.bin", 2500, FALSE },   /* 好戏来了 */
-    { u"\\frames\\014.bin", 15000, TRUE },   /* 桌面 */
+    { 0,  3500,  FALSE },
+    { 1,  0,     TRUE  },
+    { 2,  1200,  FALSE },
+    { 3,  1200,  FALSE },
+    { 4,  1200,  FALSE },
+    { 5,  1200,  FALSE },
+    { 6,  1500,  FALSE },
+    { 7,  0,     TRUE  },
+    { 8,  0,     TRUE  },
+    { 9,  0,     TRUE  },
+    { 10, 0,     TRUE  },
+    { 11, 1200,  FALSE },
+    { 12, 3500,  FALSE },
+    { 13, 2500,  FALSE },
+    { 14, 15000, TRUE  },
 };
 
 EFI_STATUS efi_main(EFI_HANDLE img, EFI_SYSTEM_TABLE *st)
@@ -121,27 +263,43 @@ EFI_STATUS efi_main(EFI_HANDLE img, EFI_SYSTEM_TABLE *st)
     UINTN n = sizeof(steps) / sizeof(steps[0]);
 
     InitializeLib(img, st);
-    Print(u"XPWIZARD: start\n");
+
+    s = uefi_call_wrapper(gBS->LocateProtocol, 3, &SerialIoProtocol, NULL, (void **)&g_ser);
+    if (EFI_ERROR(s)) g_ser = NULL;
+    slog("\r\nXPWIZARD: start\r\n");
 
     s = uefi_call_wrapper(gBS->LocateProtocol, 3, &GraphicsOutputProtocol, NULL, (void **)&gop);
-    Print(u"XPWIZARD: gop=%d err=%d %dx%d\n", gop ? 1 : 0, (int)s,
-          gop ? gop->Mode->Info->HorizontalResolution : 0,
-          gop ? gop->Mode->Info->VerticalResolution : 0);
-    if (EFI_ERROR(s)) { gop = NULL; }
+    slog_hex("gop status=", s);
+    if (EFI_ERROR(s) || gop == NULL) {
+        slog("gop NOT FOUND, halt\r\n");
+        for (;;) wait_ms(1000);
+    }
+    slog_num("mode=", gop->Mode->Mode);
+    slog_num("res x=", gop->Mode->Info->HorizontalResolution);
+    slog_num("res y=", gop->Mode->Info->VerticalResolution);
+    slog_num("stride=", gop->Mode->Info->PixelsPerScanLine);
+    slog_num("pixelformat=", gop->Mode->Info->PixelFormat);
+    slog_hex("fb=", gop->Mode->FrameBufferBase);
+    slog_hex("fb size=", gop->Mode->FrameBufferSize);
 
+    /* 1) 先画彩条，证明帧缓冲通路 */
+    test_pattern();
+    slog("test pattern drawn\r\n");
+    wait_ms(2000);
+
+    /* 2) 再逐帧播放 */
     for (UINTN i = 0; i < n; i++) {
         BOOLEAN key = FALSE;
-        BOOLEAN ok = load_frame(img, steps[i].path);
-        Print(u"XPWIZARD: frame %d load=%d\n", (int)i, ok ? 1 : 0);
+        BOOLEAN ok = load_frame(img, steps[i].idx);
+        slog_num("frame idx=", steps[i].idx);
+        slog_num("  load=", ok ? 1 : 0);
         if (ok) present();
-        if (steps[i].anyKey) {
-            pump(steps[i].hint_ms ? steps[i].hint_ms : 100000, &key);
-        } else {
-            pump(steps[i].hint_ms, &key);
-        }
+        else clear_fb(0x00333333);   /* 读帧失败 → 深灰，区别于纯黑 */
+        if (steps[i].anyKey) pump(steps[i].hint_ms ? steps[i].hint_ms : 100000, &key);
+        else pump(steps[i].hint_ms, &key);
     }
 
-    /* 走完 → 关机，便于宿主脚本判定完成 */
+    slog("wizard done, shutdown\r\n");
     wait_ms(300);
     uefi_call_wrapper(gRT->ResetSystem, 4, EfiResetShutdown, EFI_SUCCESS, 0, NULL);
     for (;;) wait_ms(1000);

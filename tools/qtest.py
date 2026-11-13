@@ -40,12 +40,22 @@ def cmdline(c):
     except Exception as e:
         print("monitor write failed", e)
 
-time.sleep(5.0)
-for i in range(12):
+n = 0
+def dump():
+    global n
+    cmdline(f"screendump {OUT}/shot_{n:02d}.ppm")
+    n += 1
+
+# 1) 固件阶段
+time.sleep(3.0); dump()
+# 2) 应用起步（彩条测试图 / 第一帧）
+time.sleep(2.0); dump()
+time.sleep(2.0); dump()
+# 3) 按键推进 20 次
+for i in range(20):
     cmdline("sendkey ret")
-    time.sleep(1.1)
-    cmdline(f"screendump {OUT}/shot_{i:02d}.ppm")
-    time.sleep(0.5)
+    time.sleep(1.0)
+    dump()
 
 cmdline("quit")
 try:

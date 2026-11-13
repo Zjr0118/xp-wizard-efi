@@ -27,6 +27,7 @@ jobs:
 
       - name: QEMU 引导自测
         run: |
+          rm -rf build/shots
           python3 tools/qtest.py || true
           python3 - <<'PY'
           import glob, os
@@ -35,7 +36,12 @@ jobs:
               Image.open(p).save(p.replace(".ppm", ".png"))
           print("png:", len(glob.glob("build/shots/*.png")))
           PY
-          cat build/qmon.log | head -40 || true
+          echo "== 帧目录 ==" | tee build/xp-serial.txt
+          mdir -i build/efiboot.img ::/frames 2>&1 | tee -a build/xp-serial.txt
+          echo "== 串口关键行 ==" | tee -a build/xp-serial.txt
+          tr -cd '\11\12\15\40-\176' < build/serial.log \
+            | grep -a -i 'XPWIZARD\|gop status\|frame idx\|load=\|short read\|roots\|volume\|mode=\|res \|stride\|pixelformat\|shutdown' \
+            | head -200 | tee -a build/xp-serial.txt || true
 
       - name: 上传产物
         if: always()
@@ -44,6 +50,8 @@ jobs:
           name: xp-wizard
           path: |
             build/XP-Wizard.iso
+            build/efiboot.img
+            build/xp-serial.txt
             build/shots/*.png
             build/iso/EFI/BOOT/BOOTX64.EFI
             build/main.so

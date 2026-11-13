@@ -51,19 +51,23 @@ def main():
 
     syms = data[strtab["off"]:strtab["off"] + strtab["size"]] if strtab else b""
 
-    # 1) 选出要保留的 ALLOC 段
+    # 1) 选出要保留的 ALLOC 段；**RVA 完全沿用 ELF 虚拟地址**，
+    #    否则节间距离变化会让编译器生成的 rip 相对寻址全部指向错误位置
     keep = [s for s in secs if s["flags"] & SHF_ALLOC and s["type"] == SHT_PROGBITS
             and s["name"] not in DROP and s["size"] > 0]
     keep.sort(key=lambda s: s["addr"])
 
-    rva = 0x1000
-    mapping = []          # (elf_start, elf_end, new_rva)
+    rva = 0x200
     for s in keep:
-        al = max(16, min(s["align"] or 16, 0x1000))
-        rva = (rva + al - 1) // al * al
-        s["rva"] = rva
-        mapping.append((s["addr"], s["addr"] + s["size"], rva))
-        rva += s["size"]
+        if s["addr"] == 0:
+            al = max(16, min(s["align"] or 16, 0x1000))
+            rva = (rva + al - 1) // al * al
+            s["rva"] = rva
+            rva += s["size"]
+        else:
+            s["rva"] = s["addr"]
+        s["rva"] = max(s["rva"], 0x200)
+    mapping = [(s["addr"], s["addr"] + s["size"], s["rva"]) for s in keep]
 
     def elf2rva(v):
         for a, b, r in mapping:
@@ -115,11 +119,12 @@ def main():
             reloc += struct.pack("<H", (10 << 12) | e)      # IMAGE_REL_BASED_DIR64
     while len(reloc) % 4:
         reloc += b"\0"
-    reloc_rva = (rva + 0xFFF) // 0x1000 * 0x1000
+    end_rva = max(s["rva"] + s["size"] for s in keep)
+    reloc_rva = (end_rva + 0x1FF) // 0x200 * 0x200
     keep.append(dict(name=".reloc", rva=reloc_rva, size=len(reloc), align=4, addr=0))
 
     # 4) 写 PE
-    sa, fa = 0x1000, 0x200
+    sa, fa = 0x200, 0x200
     hdr_size = 0x40 + 4 + 20 + 0xF0 + 40 * len(keep)
     filesz = (hdr_size + fa - 1) // fa * fa
     dirs = []
@@ -129,7 +134,7 @@ def main():
         s["raw_size"] = (s["size"] + fa - 1) // fa * fa
         filesz += s["raw_size"]
 
-    img_size = (max(s["rva"] + s["size"] for s in keep) + 0xFFF) // 0x1000 * 0x1000
+    img_size = (max(s["rva"] + s["size"] for s in keep) + 0x1FF) // 0x200 * 0x200
     out = bytearray(filesz)
     out[0:2] = b"MZ"
     struct.pack_into("<I", out, 0x3C, 0x40)

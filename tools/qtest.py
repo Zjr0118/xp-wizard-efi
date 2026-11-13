@@ -26,7 +26,7 @@ open(vars_copy, "wb").write(open(VARS, "rb").read())
 cmd = ["qemu-system-x86_64", "-machine", "q35", "-m", "1024", "-smp", "2",
        "-drive", f"if=pflash,format=raw,readonly=on,file={CODE}",
        "-drive", f"if=pflash,format=raw,file={vars_copy}",
-       "-drive", f"file={os.path.join(ROOT,'build','efiboot.img')},format=raw,if=ide",
+       "-cdrom", ISO, "-boot", "d",
        "-vga", "std", "-display", "none", "-monitor", "stdio", "-no-reboot",
        "-serial", f"file:{os.path.join(ROOT,'build','serial.log')}",
        "-d", "guest_errors,int", "-D", os.path.join(ROOT, "build", "qemu-debug.log")]

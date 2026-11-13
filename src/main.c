@@ -51,6 +51,34 @@ static void slog_hex(const char *tag, UINT64 v)
 
 static void wait_ms(UINTN ms) { uefi_call_wrapper(gBS->Stall, 1, ms * 1000); }
 
+/* 优先挑最接近 16:9 的 GOP 模式，避免上下黑边 */
+static void pick_mode(void)
+{
+    UINT32 best = 0;
+    UINT64 bestscore = (UINT64)-1;
+    UINT32 maxmode;
+    if (!gop || !gop->Mode) return;
+    maxmode = gop->Mode->MaxMode;
+    slog_num("maxmode=", maxmode);
+    for (UINT32 i = 0; i < maxmode; i++) {
+        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = NULL;
+        UINTN sz = 0;
+        if (EFI_ERROR(uefi_call_wrapper(gop->QueryMode, 4, gop, i, &sz, &info)) || !info) continue;
+        UINT32 w = info->HorizontalResolution, h = info->VerticalResolution;
+        if (w < 1024 || h < 576) continue;
+        UINT64 diff = (16 * (UINT64)h > 9 * (UINT64)w) ? (16 * (UINT64)h - 9 * (UINT64)w)
+                                                       : (9 * (UINT64)w - 16 * (UINT64)h);
+        UINT64 area = (UINT64)w * (UINT64)h;
+        UINT64 score = diff * 10000000ULL + (20000000000ULL / area);
+        if (score < bestscore) { bestscore = score; best = i; }
+    }
+    slog_num("chosen mode=", best);
+    if (best != gop->Mode->Mode) {
+        EFI_STATUS s2 = uefi_call_wrapper(gop->SetMode, 2, gop, best);
+        slog_hex("SetMode err=", s2);
+    }
+}
+
 /* ---------------- 屏幕 ---------------- */
 static void clear_fb(UINT32 rgb)
 {
@@ -275,6 +303,8 @@ EFI_STATUS efi_main(EFI_HANDLE img, EFI_SYSTEM_TABLE *st)
         for (;;) wait_ms(1000);
     }
     slog_num("mode=", gop->Mode->Mode);
+    pick_mode();
+    slog_num("final mode=", gop->Mode->Mode);
     slog_num("res x=", gop->Mode->Info->HorizontalResolution);
     slog_num("res y=", gop->Mode->Info->VerticalResolution);
     slog_num("stride=", gop->Mode->Info->PixelsPerScanLine);

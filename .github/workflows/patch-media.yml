@@ -1,0 +1,96 @@
+name: Patch macOS media with XP wizard
+on: workflow_dispatch
+permissions:
+  contents: write
+  actions: read
+jobs:
+  patch:
+    runs-on: macos-15-intel
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取最新一版向导 EFI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          RID=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow=build.yml --status=success --limit 1 --json databaseId --jq '.[0].databaseId')
+          echo "source run: $RID"
+          gh run download "$RID" --repo "$GITHUB_REPOSITORY" -n xp-wizard -D art
+          ls -l art/iso/EFI/BOOT/BOOTX64.EFI
+          cp art/iso/EFI/BOOT/BOOTX64.EFI ./BOOTX64.EFI
+          shasum -a 256 ./BOOTX64.EFI
+
+      - name: 下载原版分片并校验
+        run: |
+          set -euo pipefail
+          BASE=https://github.com/Zjr0118/macos-iso-builder/releases/download/iso-202611101351
+          mkdir -p parts
+          for i in 00 01 02 03 04 05 06 07 08; do
+            curl -L --retry 3 --retry-delay 2 -o parts/part_$i "$BASE/part_$i"
+          done
+          cat parts/part_0* > macOS.iso
+          rm -rf parts
+          ACT=$(shasum -a 256 macOS.iso | awk '{print $1}')
+          echo "sha256=$ACT"
+          test "$ACT" = "52c4522bede026f379d6e16a7487feee0d5c22bce7b1d39a6d7f619068b69881"
+
+      - name: 转可写镜像
+        run: hdiutil convert macOS.iso -format UDRW -o work.dmg
+
+      - name: 挂载并替换苹果 boot.efi
+        run: |
+          set -euo pipefail
+          hdiutil attach work.dmg -readwrite -noverify -mountpoint /tmp/mnt
+          echo "== 原始 =="; ls -l /tmp/mnt/System/Library/CoreServices/ | head -20
+          cp /tmp/mnt/System/Library/CoreServices/boot.efi /tmp/mnt/System/Library/CoreServices/boot-orig.efi
+          cp ./BOOTX64.EFI /tmp/mnt/System/Library/CoreServices/boot.efi
+          echo "== 替换后 =="; ls -l /tmp/mnt/System/Library/CoreServices/boot*.efi
+          df -h /tmp/mnt
+          sync
+          hdiutil detach /tmp/mnt
+
+      - name: 重新打包为 ISO 并分片
+        run: |
+          set -euo pipefail
+          hdiutil convert work.dmg -format UDTO -o macOS-patched
+          rm -f work.dmg macOS.iso
+          mv macOS-patched.cdr macOS-Sonoma-14.8.9-XP.iso
+          ls -l macOS-Sonoma-14.8.9-XP.iso
+          shasum -a 256 macOS-Sonoma-14.8.9-XP.iso | tee macOS-XP.iso.sha256
+          mkdir -p out
+          split -b 1900m -d -a 2 macOS-Sonoma-14.8.9-XP.iso out/part_
+          ls -l out
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="iso-xp-$(date -u +%Y%m%d%H%M)"
+          cat > notes.md <<EOF
+          macOS Sonoma 14.8.9 安装介质 + XP 向导引导层（一体化单张 ISO）
+
+          开机先播 XP 安装向导（视频同款 15 屏），演完自动把控制权交回苹果原始 boot.efi，
+          随后进入真实的 macOS 安装器（Recovery/InstallAssistant）。
+
+          - 内容：原版 Apple createinstallmedia 介质，仅把 /System/Library/CoreServices/boot.efi
+            替换为向导程序，原始文件保留为同目录 boot-orig.efi
+          - 校验：见 macOS-XP.iso.sha256
+          - 合并：Windows copy /b part_00+...+part_08 macOS.iso ；macOS/Linux cat part_* > macOS.iso
+          EOF
+          gh release create "$TAG" out/part_* macOS-XP.iso.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "macOS Sonoma 14.8.9 + XP 向导（一体化 ISO）" \
+            --notes-file notes.md
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传工作副本
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-media-logs
+          path: |
+            macOS-XP.iso.sha256
+          if-no-files-found: ignore

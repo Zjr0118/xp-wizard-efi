@@ -1,0 +1,40 @@
+name: Smoke test HFS patch mechanics
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: 造一个测试用 HFS+ 镜像
+        run: |
+          set -euo pipefail
+          hdiutil create -size 200m -fs HFS+ -volname InstallTest /tmp/test.dmg
+          hdiutil attach /tmp/test.dmg -mountpoint /tmp/mnt0
+          mkdir -p /tmp/mnt0/System/Library/CoreServices
+          echo "original-boot-efi" > /tmp/mnt0/System/Library/CoreServices/boot.efi
+          ls -l /tmp/mnt0/System/Library/CoreServices/
+          hdiutil detach /tmp/mnt0
+      - name: 转 UDRW 并替换
+        run: |
+          set -euo pipefail
+          hdiutil convert /tmp/test.dmg -format UDRW -o /tmp/work.dmg
+          hdiutil attach /tmp/work.dmg -readwrite -noverify -mountpoint /tmp/mnt
+          ls -l /tmp/mnt/System/Library/CoreServices/
+          cp /tmp/mnt/System/Library/CoreServices/boot.efi /tmp/mnt/System/Library/CoreServices/boot-orig.efi
+          head -c 1048576 /dev/urandom > /tmp/newboot.efi
+          cp /tmp/newboot.efi /tmp/mnt/System/Library/CoreServices/boot.efi
+          ls -l /tmp/mnt/System/Library/CoreServices/boot*.efi
+          df -h /tmp/mnt
+          hdiutil detach /tmp/mnt
+      - name: 转回 UDTO 并校验内容
+        run: |
+          set -euo pipefail
+          hdiutil convert /tmp/work.dmg -format UDTO -o /tmp/out
+          ls -l /tmp/out.cdr
+          hdiutil attach /tmp/out.cdr -readonly -mountpoint /tmp/chk
+          cat /tmp/chk/System/Library/CoreServices/boot-orig.efi
+          ls -l /tmp/chk/System/Library/CoreServices/
+          hdiutil detach /tmp/chk

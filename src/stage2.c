@@ -26,7 +26,7 @@ EFI_STATUS efi_main(EFI_HANDLE img, EFI_SYSTEM_TABLE *st)
     InitializeLib(img, st);
     if (!EFI_ERROR(uefi_call_wrapper(gBS->LocateProtocol, 3, &GraphicsOutputProtocol, NULL, (void **)&gop)))
         fill(gop, 0x0000FF00);   /* 纯绿：只要看到整屏绿，就说明 handoff 成功 */
-    Print(L"STAGE2 reached\r\n");
+    Print(u"STAGE2 reached\r\n");
     for (;;) wait_ms(1000);
     return EFI_SUCCESS;
 }

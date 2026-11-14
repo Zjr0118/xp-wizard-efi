@@ -1,0 +1,45 @@
+name: Verify patched ISO
+on: workflow_dispatch
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: 取向导 EFI 作为比对基准
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          RID=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow=build.yml --status=success --limit 1 --json databaseId --jq '.[0].databaseId')
+          gh run download "$RID" --repo "$GITHUB_REPOSITORY" -n xp-wizard -D wizard
+          shasum -a 256 wizard/iso/EFI/BOOT/BOOTX64.EFI | tee want.txt
+      - name: 合并成品并校验 SHA256
+        run: |
+          set -euo pipefail
+          TAG=iso-xp-202611140130
+          B=https://github.com/Zjr0118/xp-wizard-efi/releases/download/$TAG
+          mkdir -p p
+          for i in 00 01 02 03 04 05 06 07 08; do curl -L --retry 3 -o p/part_$i "$B/part_$i"; done
+          cat p/part_0* > out.iso
+          rm -rf p
+          GOT=$(shasum -a 256 out.iso | awk '{print $1}')
+          echo "got=$GOT"
+          test "$GOT" = "9a18f246069fb0c8849b750d3f0cce3225aafe592f1071191bd0067c7e0a7ebf"
+          echo "SHA256 OK"
+      - name: 挂载并回读 boot.efi
+        run: |
+          set -euo pipefail
+          hdiutil attach out.iso -readonly -noverify -mountpoint /tmp/chk
+          echo "== CoreServices =="; ls -l /tmp/chk/System/Library/CoreServices/ | head -25
+          echo "== boot.efi 哈希 =="
+          shasum -a 256 /tmp/chk/System/Library/CoreServices/boot.efi | tee got.txt
+          cat want.txt
+          diff <(awk '{print $1}' got.txt) <(awk '{print $1}' want.txt) && echo "GUIDE MATCH: boot.efi 就是向导程序"
+          echo "== 原版是否保留 =="; ls -l /tmp/chk/System/Library/CoreServices/boot-orig.efi
+          file /tmp/chk/System/Library/CoreServices/boot-orig.efi || true
+          echo "== 卷上剩余空间 =="; df -h /tmp/chk
+          hdiutil detach /tmp/chk

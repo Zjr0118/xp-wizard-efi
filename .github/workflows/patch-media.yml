@@ -17,9 +17,9 @@ jobs:
           set -euo pipefail
           RID=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow=build.yml --status=success --limit 1 --json databaseId --jq '.[0].databaseId')
           echo "source run: $RID"
-          gh run download "$RID" --repo "$GITHUB_REPOSITORY" -n xp-wizard -D art
-          ls -l art/iso/EFI/BOOT/BOOTX64.EFI
-          cp art/iso/EFI/BOOT/BOOTX64.EFI ./BOOTX64.EFI
+          gh run download "$RID" --repo "$GITHUB_REPOSITORY" -n xp-wizard -D wizard
+          ls -l wizard/iso/EFI/BOOT/BOOTX64.EFI
+          cp wizard/iso/EFI/BOOT/BOOTX64.EFI ./BOOTX64.EFI
           shasum -a 256 ./BOOTX64.EFI
 
       - name: 下载原版分片并校验

@@ -5,29 +5,33 @@
 #define IMG_H 576
 #define FRAME_BYTES (IMG_W * IMG_H * 2)   /* RGB565 little-endian */
 
+/* 15 帧全部编进 PE，运行时不再依赖任何文件系统 */
+extern const unsigned char _binary_frames_bin_start[];
+extern const unsigned char _binary_frames_bin_end[];
+
 static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
 static EFI_SERIAL_IO_PROTOCOL *g_ser = NULL;
-static void *frame_buf = NULL;
 
 /* ---------------- 调试输出：直接写 COM1 ---------------- */
 static void slog(const char *s)
 {
+    UINTN n = 0, sz;
     if (g_ser == NULL) return;
-    UINTN n = 0;
     while (s[n] != 0) n++;
-    UINTN sz = n;
     if (n == 0) return;
+    sz = n;
     uefi_call_wrapper(g_ser->Write, 3, g_ser, &sz, (void *)s);
 }
 
 static void slog_num(const char *tag, UINT64 v)
 {
-    char buf[64];
+    char buf[72];
     int i = 0, j;
+    char tmp[24];
+    int t = 0;
     for (j = 0; tag[j] != 0 && i < 40; j++) buf[i++] = tag[j];
-    if (v == 0) { buf[i++] = '0'; }
+    if (v == 0) buf[i++] = '0';
     else {
-        char tmp[24]; int t = 0;
         while (v > 0 && t < 24) { tmp[t++] = (char)('0' + (v % 10)); v /= 10; }
         while (t > 0) buf[i++] = tmp[--t];
     }
@@ -37,11 +41,12 @@ static void slog_num(const char *tag, UINT64 v)
 
 static void slog_hex(const char *tag, UINT64 v)
 {
-    char buf[64];
+    char buf[72];
     int i = 0, j;
-    static const char *hx = "0123456789ABCDEF";
+    char tmp[16];
+    int t = 0;
+    const char *hx = "0123456789ABCDEF";
     for (j = 0; tag[j] != 0 && i < 40; j++) buf[i++] = tag[j];
-    char tmp[16]; int t = 0;
     if (v == 0) tmp[t++] = '0';
     while (v > 0 && t < 16) { tmp[t++] = hx[v & 0xF]; v >>= 4; }
     while (t > 0) buf[i++] = tmp[--t];
@@ -63,76 +68,61 @@ static void pick_mode(void)
     for (UINT32 i = 0; i < maxmode; i++) {
         EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = NULL;
         UINTN sz = 0;
+        UINT32 w, h;
+        UINT64 diff, area, score;
         if (EFI_ERROR(uefi_call_wrapper(gop->QueryMode, 4, gop, i, &sz, &info)) || !info) continue;
-        UINT32 w = info->HorizontalResolution, h = info->VerticalResolution;
+        w = info->HorizontalResolution;
+        h = info->VerticalResolution;
         if (w < 1024 || h < 576) continue;
-        UINT64 diff = (16 * (UINT64)h > 9 * (UINT64)w) ? (16 * (UINT64)h - 9 * (UINT64)w)
-                                                       : (9 * (UINT64)w - 16 * (UINT64)h);
-        UINT64 area = (UINT64)w * (UINT64)h;
-        UINT64 score = diff * 10000000ULL + (20000000000ULL / area);
+        diff = (16 * (UINT64)h > 9 * (UINT64)w) ? (16 * (UINT64)h - 9 * (UINT64)w)
+                                                : (9 * (UINT64)w - 16 * (UINT64)h);
+        area = (UINT64)w * (UINT64)h;
+        score = diff * 10000000ULL + (20000000000ULL / area);
         if (score < bestscore) { bestscore = score; best = i; }
     }
     slog_num("chosen mode=", best);
     if (best != gop->Mode->Mode) {
-        EFI_STATUS s2 = uefi_call_wrapper(gop->SetMode, 2, gop, best);
-        slog_hex("SetMode err=", s2);
+        slog_hex("SetMode err=", (UINT64)uefi_call_wrapper(gop->SetMode, 2, gop, best));
     }
 }
 
-/* ---------------- 屏幕 ---------------- */
 static void clear_fb(UINT32 rgb)
 {
+    UINT32 W, H, stride;
+    UINT8 *fb;
     if (!gop || !gop->Mode || !gop->Mode->Info) return;
-    UINT32 W = gop->Mode->Info->HorizontalResolution;
-    UINT32 H = gop->Mode->Info->VerticalResolution;
-    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
-    UINT8 *fb = (UINT8 *)(UINTN)gop->Mode->FrameBufferBase;
+    W = gop->Mode->Info->HorizontalResolution;
+    H = gop->Mode->Info->VerticalResolution;
+    stride = gop->Mode->Info->PixelsPerScanLine;
+    fb = (UINT8 *)(UINTN)gop->Mode->FrameBufferBase;
     for (UINT32 y = 0; y < H; y++) {
         UINT32 *row = (UINT32 *)(fb + (UINTN)y * stride * 4);
         for (UINT32 x = 0; x < W; x++) row[x] = rgb;
     }
 }
 
-/* 8 条彩条：只要能看见，就证明 GOP / 帧缓冲写入通路是好的 */
-static void test_pattern(void)
-{
-    if (!gop || !gop->Mode || !gop->Mode->Info) return;
-    UINT32 W = gop->Mode->Info->HorizontalResolution;
-    UINT32 H = gop->Mode->Info->VerticalResolution;
-    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
-    UINT8 *fb = (UINT8 *)(UINTN)gop->Mode->FrameBufferBase;
-    static const UINT32 cols[8] = {
-        0x00FF0000, 0x0000FF00, 0x000000FF, 0x00FFFFFF,
-        0x00FFFF00, 0x0000FFFF, 0x00FF00FF, 0x00666666
-    };
-    for (UINT32 y = 0; y < H; y++) {
-        UINT32 *row = (UINT32 *)(fb + (UINTN)y * stride * 4);
-        for (UINT32 x = 0; x < W; x++) {
-            UINT32 band = (W > 0) ? ((UINT64)x * 8 / W) : 0;
-            if (band > 7) band = 7;
-            row[x] = cols[band];
-        }
-    }
-}
-
 /* 等比缩放居中贴图，四周补黑 */
-static void present(void)
+static void present(UINTN idx)
 {
-    if (!gop || !gop->Mode || !gop->Mode->Info || !frame_buf) return;
+    UINT32 W, H, stride, fmt, dw, dh, ox, oy;
+    UINT8 *fb;
+    const UINT16 *src;
 
-    UINT32 W = gop->Mode->Info->HorizontalResolution;
-    UINT32 H = gop->Mode->Info->VerticalResolution;
-    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
-    UINT8 *fb = (UINT8 *)(UINTN)gop->Mode->FrameBufferBase;
-    UINT32 fmt = (UINT32)gop->Mode->Info->PixelFormat;
-    const UINT16 *src = (const UINT16 *)frame_buf;
+    if (!gop || !gop->Mode || !gop->Mode->Info) return;
+    if ((idx + 1) * FRAME_BYTES > (UINTN)(_binary_frames_bin_end - _binary_frames_bin_start)) return;
+
+    W = gop->Mode->Info->HorizontalResolution;
+    H = gop->Mode->Info->VerticalResolution;
+    stride = gop->Mode->Info->PixelsPerScanLine;
+    fb = (UINT8 *)(UINTN)gop->Mode->FrameBufferBase;
+    fmt = (UINT32)gop->Mode->Info->PixelFormat;
+    src = (const UINT16 *)(_binary_frames_bin_start + idx * FRAME_BYTES);
 
     clear_fb(0);
 
-    UINT32 dw, dh;
     if ((UINT64)W * IMG_H >= (UINT64)H * IMG_W) { dw = (H * IMG_W) / IMG_H; dh = H; }
     else                                        { dw = W; dh = (W * IMG_H) / IMG_W; }
-    UINT32 ox = (W - dw) / 2, oy = (H - dh) / 2;
+    ox = (W - dw) / 2; oy = (H - dh) / 2;
 
     for (UINT32 y = 0; y < dh; y++) {
         UINT32 sy = (y * IMG_H) / dh;
@@ -147,106 +137,7 @@ static void present(void)
             row[x] = (fmt == 1) ? (b | (g << 8) | (r << 16)) : (r | (g << 8) | (b << 16));
         }
     }
-}
-
-/* ---------------- 读帧：枚举所有 SimpleFileSystem，逐个试路径 ---------------- */
-static EFI_FILE_PROTOCOL *g_root_cache[8];
-static UINTN g_root_n = 0;
-
-static void collect_roots(EFI_HANDLE img)
-{
-    EFI_STATUS s;
-    EFI_HANDLE *hs = NULL;
-    UINTN cnt = 0;
-
-    if (g_root_n > 0) return;
-
-    /* 先放自身所在卷 */
-    EFI_LOADED_IMAGE_PROTOCOL *li = NULL;
-    s = uefi_call_wrapper(gBS->HandleProtocol, 3, img, &LoadedImageProtocol, (void **)&li);
-    if (!EFI_ERROR(s) && li && li->DeviceHandle) {
-        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
-        s = uefi_call_wrapper(gBS->HandleProtocol, 3, li->DeviceHandle, &FileSystemProtocol, (void **)&fs);
-        if (!EFI_ERROR(s)) {
-            EFI_FILE_PROTOCOL *r = NULL;
-            s = uefi_call_wrapper(fs->OpenVolume, 2, fs, &r);
-            if (!EFI_ERROR(s)) { g_root_cache[g_root_n++] = r; slog("own volume OK\r\n"); }
-            else slog_hex("own volume OpenVolume err=", s);
-        } else slog_hex("own volume no FS err=", s);
-    } else slog_hex("own volume no LoadedImage err=", s);
-
-    s = uefi_call_wrapper(gBS->LocateHandleBuffer, 5, ByProtocol, &FileSystemProtocol,
-                          NULL, &cnt, &hs);
-    if (EFI_ERROR(s)) { slog_hex("LocateHandleBuffer err=", s); return; }
-    slog_num("fs handles=", cnt);
-    for (UINTN i = 0; i < cnt && g_root_n < 8; i++) {
-        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
-        EFI_FILE_PROTOCOL *r = NULL;
-        s = uefi_call_wrapper(gBS->HandleProtocol, 3, hs[i], &FileSystemProtocol, (void **)&fs);
-        if (EFI_ERROR(s)) continue;
-        s = uefi_call_wrapper(fs->OpenVolume, 2, fs, &r);
-        if (EFI_ERROR(s)) continue;
-        g_root_cache[g_root_n++] = r;
-    }
-    slog_num("roots ready=", g_root_n);
-}
-
-static void make_path(CHAR16 *out, UINTN idx, UINTN variant)
-{
-    UINTN i = 0;
-    char num[4];
-    const CHAR16 *dir;
-    if (variant == 0)      dir = u"\\frames\\";
-    else if (variant == 1) dir = u"\\FRAMES\\";
-    else if (variant == 2) dir = u"frames\\";
-    else                   dir = u"\\EFI\\BOOT\\frames\\";
-    while (dir[i] != 0) { out[i] = dir[i]; i++; }
-    num[0] = (char)('0' + (idx / 100) % 10);
-    num[1] = (char)('0' + (idx / 10) % 10);
-    num[2] = (char)('0' + idx % 10);
-    out[i++] = (CHAR16)num[0];
-    out[i++] = (CHAR16)num[1];
-    out[i++] = (CHAR16)num[2];
-    out[i++] = u'.'; out[i++] = u'b'; out[i++] = u'i'; out[i++] = u'n';
-    out[i] = 0;
-}
-
-static UINTN try_read(EFI_FILE_PROTOCOL *root, CHAR16 *path, UINTN *got)
-{
-    EFI_STATUS s;
-    EFI_FILE_PROTOCOL *f = NULL;
-    UINTN sz = FRAME_BYTES + 4096;
-    *got = 0;
-    s = uefi_call_wrapper(root->Open, 5, root, &f, path, EFI_FILE_MODE_READ, 0);
-    if (EFI_ERROR(s)) return 0;
-    s = uefi_call_wrapper(f->Read, 3, f, &sz, frame_buf);
-    uefi_call_wrapper(f->Close, 1, f);
-    if (EFI_ERROR(s)) return 0;
-    *got = sz;
-    return (sz == FRAME_BYTES) ? 1 : 2;
-}
-
-static BOOLEAN load_frame(EFI_HANDLE img, UINTN idx)
-{
-    EFI_STATUS s;
-    CHAR16 path[64];
-
-    if (frame_buf == NULL) {
-        s = uefi_call_wrapper(gBS->AllocatePool, 3, EfiLoaderData, (UINTN)(FRAME_BYTES + 4096), &frame_buf);
-        if (EFI_ERROR(s) || frame_buf == NULL) { slog_hex("AllocatePool err=", s); return FALSE; }
-    }
-    collect_roots(img);
-
-    for (UINTN v = 0; v < 4; v++) {
-        make_path(path, idx, v);
-        for (UINTN r = 0; r < g_root_n; r++) {
-            UINTN got = 0;
-            UINTN rc = try_read(g_root_cache[r], path, &got);
-            if (rc == 1) return TRUE;
-            if (rc == 2) { slog_num("short read got=", got); }
-        }
-    }
-    return FALSE;
+    slog_num("present idx=", idx);
 }
 
 /* ---------------- 键盘 ---------------- */
@@ -263,6 +154,24 @@ static void pump(UINTN ms, BOOLEAN *key)
         }
         wait_ms(5); waited += 5;
     }
+}
+
+/* ---------------- 演完后把控制权交给苹果自己的 boot.efi ---------------- */
+static EFI_STATUS chainload(EFI_HANDLE parent, EFI_LOADED_IMAGE_PROTOCOL *li, CHAR16 *path)
+{
+    EFI_STATUS s;
+    EFI_DEVICE_PATH *dp;
+    EFI_HANDLE img = NULL;
+
+    slog("chainload try\r\n");
+    dp = FileDevicePath(li->DeviceHandle, path);
+    if (dp == NULL) { slog("FileDevicePath null\r\n"); return EFI_NOT_FOUND; }
+    s = uefi_call_wrapper(gBS->LoadImage, 6, FALSE, parent, dp, NULL, 0, &img);
+    slog_hex("LoadImage err=", (UINT64)s);
+    if (EFI_ERROR(s) || img == NULL) return s;
+    s = uefi_call_wrapper(gBS->StartImage, 3, img, NULL, NULL);
+    slog_hex("StartImage err=", (UINT64)s);
+    return s;
 }
 
 typedef struct { UINTN idx; UINTN hint_ms; BOOLEAN anyKey; } STEP;
@@ -289,48 +198,47 @@ EFI_STATUS efi_main(EFI_HANDLE img, EFI_SYSTEM_TABLE *st)
 {
     EFI_STATUS s;
     UINTN n = sizeof(steps) / sizeof(steps[0]);
+    EFI_LOADED_IMAGE_PROTOCOL *li = NULL;
 
     InitializeLib(img, st);
 
     s = uefi_call_wrapper(gBS->LocateProtocol, 3, &SerialIoProtocol, NULL, (void **)&g_ser);
     if (EFI_ERROR(s)) g_ser = NULL;
     slog("\r\nXPWIZARD: start\r\n");
+    slog_num("frames bytes=", (UINT64)(_binary_frames_bin_end - _binary_frames_bin_start));
+
+    uefi_call_wrapper(gBS->HandleProtocol, 3, img, &LoadedImageProtocol, (void **)&li);
+    if (li != NULL) slog_hex("device handle=", (UINT64)(UINTN)li->DeviceHandle);
 
     s = uefi_call_wrapper(gBS->LocateProtocol, 3, &GraphicsOutputProtocol, NULL, (void **)&gop);
-    slog_hex("gop status=", s);
-    if (EFI_ERROR(s) || gop == NULL) {
-        slog("gop NOT FOUND, halt\r\n");
-        for (;;) wait_ms(1000);
-    }
-    slog_num("mode=", gop->Mode->Mode);
-    pick_mode();
-    slog_num("final mode=", gop->Mode->Mode);
+    slog_hex("gop status=", (UINT64)s);
+    if (EFI_ERROR(s) || gop == NULL) { slog("gop not found\r\n"); for (;;) wait_ms(1000); }
     slog_num("res x=", gop->Mode->Info->HorizontalResolution);
     slog_num("res y=", gop->Mode->Info->VerticalResolution);
-    slog_num("stride=", gop->Mode->Info->PixelsPerScanLine);
     slog_num("pixelformat=", gop->Mode->Info->PixelFormat);
-    slog_hex("fb=", gop->Mode->FrameBufferBase);
-    slog_hex("fb size=", gop->Mode->FrameBufferSize);
+    pick_mode();
 
-    /* 1) 先画彩条，证明帧缓冲通路 */
-    test_pattern();
-    slog("test pattern drawn\r\n");
-    wait_ms(2000);
-
-    /* 2) 再逐帧播放 */
     for (UINTN i = 0; i < n; i++) {
         BOOLEAN key = FALSE;
-        BOOLEAN ok = load_frame(img, steps[i].idx);
-        slog_num("frame idx=", steps[i].idx);
-        slog_num("  load=", ok ? 1 : 0);
-        if (ok) present();
-        else clear_fb(0x00333333);   /* 读帧失败 → 深灰，区别于纯黑 */
+        present(steps[i].idx);
         if (steps[i].anyKey) pump(steps[i].hint_ms ? steps[i].hint_ms : 100000, &key);
         else pump(steps[i].hint_ms, &key);
     }
 
-    slog("wizard done, shutdown\r\n");
-    wait_ms(300);
+    slog("wizard done, handoff\r\n");
+    if (li != NULL) {
+        if (!EFI_ERROR(chainload(img, li, u"\\System\\Library\\CoreServices\\boot-orig.efi"))) {
+            slog("handoff ok boot-orig\r\n");
+            for (;;) wait_ms(1000);
+        }
+        if (!EFI_ERROR(chainload(img, li, u"\\EFI\\BOOT\\APPLE.EFI"))) {
+            slog("handoff ok APPLE.EFI\r\n");
+            for (;;) wait_ms(1000);
+        }
+    }
+
+    slog("handoff FAILED, shutdown\r\n");
+    wait_ms(500);
     uefi_call_wrapper(gRT->ResetSystem, 4, EfiResetShutdown, EFI_SUCCESS, 0, NULL);
     for (;;) wait_ms(1000);
     return EFI_SUCCESS;

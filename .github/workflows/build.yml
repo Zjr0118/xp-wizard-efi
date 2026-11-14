@@ -40,7 +40,7 @@ jobs:
           mdir -i build/efiboot.img ::/frames 2>&1 | tee -a build/xp-serial.txt
           echo "== 串口关键行 ==" | tee -a build/xp-serial.txt
           tr -cd '\11\12\15\40-\176' < build/serial.log \
-            | grep -a -i 'XPWIZARD\|gop status\|frame idx\|load=\|short read\|roots\|volume\|mode=\|res \|stride\|pixelformat\|shutdown' \
+            | grep -a -i 'XPWIZARD\|gop status\|frames bytes\|present idx\|mode=\|res \|pixelformat\|handoff\|chainload\|LoadImage\|StartImage\|STAGE2' \
             | head -200 | tee -a build/xp-serial.txt || true
 
       - name: 上传产物
@@ -51,6 +51,7 @@ jobs:
           path: |
             build/XP-Wizard.iso
             build/efiboot.img
+            build/iso/EFI/BOOT/APPLE.EFI
             build/xp-serial.txt
             build/shots/*.png
             build/iso/EFI/BOOT/BOOTX64.EFI
